@@ -1,8 +1,6 @@
 var fs = require('fs');
 var path = require('path');
 
-//var clone = require('gulp-clone');
-
 var through = require('through2');
 var sort = require('sort-stream2')
 
@@ -35,6 +33,16 @@ function BEMProject(opts) {
 
 BEMProject.prototype.bundle = function (opts) {
     opts || (opts = {});
+
+    // if (opts.levels && (
+    //     opts.levels.length !== this.levels.length ||
+    //     opts.levels !== this.levels // <----------- TODO <----------
+    // )) {
+    //     opts.introspection = this.introspection.then(function(levels) {
+    //         // filtrrrrr <----------- TODO <------------
+    //         return levels;
+    //     });
+    // } else {
 
     // TODO: Levels of bundle are subset of project levels 
 
@@ -100,7 +108,8 @@ function BEMBundle(opts) {
     var declStream = vfs.src(this._decl);
 
     if (this._decl.endsWith('.bemjson.js')) {
-        this._entities  = declStream.pipe(bemjsonToBemEntity());
+        this._entities = declStream.pipe(bemjsonToBemEntity());
+        this._bemjson = declStream.pipe(through.obj());
     } else {
         this._entities = declStream.pipe(bemdeclToBemEntity());
     }
@@ -118,8 +127,14 @@ BEMBundle.prototype.entities = function() {
     return this._entities;
 };
 
+BEMBundle.prototype.bemjson = function() {
+    return this._bemjson.pipe(through.obj(function(file, enc, cb) {
+        cb(null, file.clone());
+    }));
+};
+
 BEMBundle.prototype.src = function(opts) {
-    if (!opts.tech) throw new Error('Prokin` tech');
+    if (!opts.tech) throw new Error('Tech is required');
 
     var extensions = opts.extensions || [opts.tech];
     var stream = through.obj();
@@ -138,13 +153,28 @@ BEMBundle.prototype.src = function(opts) {
                 return stream.push(null);
             }
 
-            sourceFiles.forEach(function(source) {
+            var que = {};
+            var length = sourceFiles.length;
+            length || stream.push(null);
+            // push files to stream in same order they come
+            function pushFilesFromQue() {
+                for (var j = 0; j <= length; j++) {
+                    var file = que[j];
+                    if (!file) { continue; }
+                    if (!file.contents) { break; }
+                    stream.push(file);
+                    que[j] = undefined;
+                }
+                if (j > length) { stream.push(null); }
+            }
+            sourceFiles.forEach(function(source, i) {
                 var file = new File({path: source.path});
-                // TODO: Think about async read
-                file.contents = fs.readFileSync(file.path);
-                stream.push(file);
+                que[i] = file;
+                fs.readFile(source.path, function(err, content) {
+                    file.contents = content;
+                    pushFilesFromQue(sourceFiles.length);
+                });
             });
-            stream.push(null);
         });
     })
     .catch(function(err) {
@@ -154,20 +184,6 @@ BEMBundle.prototype.src = function(opts) {
 
     return stream;
 };
-
-BEMBundle.prototype.comment = function() {
-    var bundlePath = this._path;
-    return through.obj(function(file, enc, cb) {
-        var filePath = path.relative(bundlePath, file.path),
-            commentsBegin = '/* ' + filePath + ': begin */ /**/\n',
-            commentsEnd = '\n/* ' + filePath + ': end */ /**/\n';
-
-        file.contents = Buffer.concat([new Buffer(commentsBegin),
-                file.contents,
-                new Buffer(commentsEnd)])
-        cb(null, file);
-    });
-}
 
 BEMBundle.prototype.name = function () {
     return this._name;
